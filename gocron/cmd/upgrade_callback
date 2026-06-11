@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "[$(date)] upgrade_callback" >> "/var/log/apps/${TRIM_APPNAME}.log"
+exit 0

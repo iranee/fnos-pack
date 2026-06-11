@@ -1,0 +1,4 @@
+#!/bin/bash
+
+echo "[$(date)] config_init" >> "/var/log/apps/${TRIM_APPNAME}.log"
+exit 0

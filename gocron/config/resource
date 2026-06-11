@@ -1,0 +1,12 @@
+{
+    "data-share": {
+        "shares": [
+            {
+                "name": "Gocron",
+                "permission": {
+                    "rw": ["gocron"]
+                }
+            }
+        ]
+    }
+}
