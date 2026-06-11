@@ -1,0 +1,280 @@
+# =============================================================
+# Build fnOS fpk — 通用多应用打包 CI
+# =============================================================
+# 自动发现所有含 manifest 的子目录，逐个打包 fpk。
+# 每个应用如有 download.sh，会先执行下载二进制。
+# 构建完成后创建 Draft Release（草稿箱，需手动发布）。
+# =============================================================
+
+name: Build fnOS fpk
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: '应用名（留空则构建所有应用）'
+        required: false
+        default: ''
+      version:
+        description: '版本号（留空使用 manifest 中的版本）'
+        required: false
+        default: ''
+      force:
+        description: '强制重新构建（即使 Release 已存在）'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Init
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          sudo timedatectl set-timezone "Asia/Shanghai"
+
+      # ---- 发现应用 ----
+      - name: Discover Apps
+        id: discover
+        run: |
+          APP_FILTER="${{ inputs.app }}"
+
+          if [ -n "$APP_FILTER" ]; then
+            # 指定应用
+            [ -d "$APP_FILTER" ] || { echo "::error::目录不存在: $APP_FILTER"; exit 1; }
+            [ -f "$APP_FILTER/manifest" ] || { echo "::error::$APP_FILTER 缺少 manifest"; exit 1; }
+            APPS="$APP_FILTER"
+          else
+            # 发现所有含 manifest 的子目录
+            APPS=""
+            for dir in */; do
+              [ -f "$dir/manifest" ] && APPS="$APPS $(basename "$dir")"
+            done
+            APPS=$(echo "$APPS" | xargs)
+            [ -n "$APPS" ] || { echo "::error::未找到含 manifest 的应用目录"; exit 1; }
+          fi
+
+          echo "apps=$APPS" >> "$GITHUB_OUTPUT"
+          echo "发现应用: $APPS"
+
+      # ---- 设置 fnpack ----
+      - name: Setup fnpack
+        run: |
+          FNPACK_URL="https://static2.fnnas.com/fnpack/fnpack-1.0.4-linux-amd64"
+          curl -fsSL "$FNPACK_URL" -o fnpack
+          chmod +x fnpack
+          echo "fnpack 已就绪"
+
+      # ---- 逐个应用构建 ----
+      - name: Build
+        id: build
+        run: |
+          APPS="${{ steps.discover.outputs.apps }}"
+          VERSION_OVERRIDE="${{ inputs.version }}"
+          DIST_DIR="$GITHUB_WORKSPACE/dist"
+          FNPACK="$GITHUB_WORKSPACE/fnpack"
+          mkdir -p "$DIST_DIR"
+
+          # 架构列表
+          ARCHS=("x86" "arm")
+          declare -A ARCH_DIR=( ["x86"]="x86_64" ["arm"]="arm64" )
+          declare -A ARCH_UPSTREAM=( ["x86"]="amd64" ["arm"]="arm64" )
+
+          BUILT_FILES=""
+          TAG_PARTS=""
+
+          for APP_NAME in $APPS; do
+            echo ""
+            echo "════════════════════════════════════════"
+            echo "  $APP_NAME"
+            echo "════════════════════════════════════════"
+
+            APP_DIR="$GITHUB_WORKSPACE/$APP_NAME"
+
+            # 读取 manifest
+            M_APPNAME=$(grep "^appname" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
+            M_VERSION=$(grep "^version" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
+
+            # 版本覆盖
+            [ -n "$VERSION_OVERRIDE" ] && M_VERSION="$VERSION_OVERRIDE"
+
+            if [ -z "$M_APPNAME" ] || [ -z "$M_VERSION" ]; then
+              echo "::warning::$APP_NAME: manifest 缺少 appname 或 version，跳过"
+              continue
+            fi
+
+            echo "  版本: v${M_VERSION}"
+            TAG_PARTS="$TAG_PARTS ${M_APPNAME}_v${M_VERSION}"
+
+            # ---- 执行 get.sh（如果有）----
+            if [ -x "$APP_DIR/download.sh" ] || [ -f "$APP_DIR/download.sh" ]; then
+              echo "  执行 download.sh 下载二进制..."
+              (cd "$APP_DIR" && bash download.sh "$M_VERSION") || echo "::warning::download.sh 执行失败"
+            fi
+
+            # ---- 逐架构打包 ----
+            for PLATFORM in "${ARCHS[@]}"; do
+              BIN_ARCH_DIR="${ARCH_DIR[$PLATFORM]}"
+
+              echo ""
+              echo "  [$PLATFORM] 构建中..."
+
+              # 清理
+              find "$APP_DIR/app" -maxdepth 1 -type f -executable \
+                ! -path "*/bin/*" ! -path "*/ui/*" -delete 2>/dev/null || true
+
+              # 复制二进制
+              if [ -d "$APP_DIR/$BIN_ARCH_DIR" ] && [ "$(ls -A "$APP_DIR/$BIN_ARCH_DIR" 2>/dev/null)" ]; then
+                cp "$APP_DIR/$BIN_ARCH_DIR/"* "$APP_DIR/app/" 2>/dev/null || true
+                chmod +x "$APP_DIR/app/"* 2>/dev/null || true
+                echo "  [$PLATFORM] 已复制 $BIN_ARCH_DIR/ → app/"
+              else
+                echo "::warning::  [$PLATFORM] $BIN_ARCH_DIR/ 不存在或为空"
+              fi
+
+              # 更新 manifest
+              sed -i "s/^version.*=.*/version               = ${M_VERSION}/" "$APP_DIR/manifest"
+              sed -i "s/^platform.*=.*/platform              = ${PLATFORM}/" "$APP_DIR/manifest"
+
+              # fnpack build
+              cd "$APP_DIR"
+              "$FNPACK" build --directory "$APP_DIR"
+
+              # 移动输出
+              SOURCE_FPK="$APP_DIR/${M_APPNAME}.fpk"
+              if [ -f "$SOURCE_FPK" ]; then
+                FPK_NAME="${M_APPNAME}_${PLATFORM}_v${M_VERSION}.fpk"
+                mv "$SOURCE_FPK" "$DIST_DIR/$FPK_NAME"
+                SIZE=$(du -h "$DIST_DIR/$FPK_NAME" | cut -f1)
+                echo "  [$PLATFORM] ✓ $FPK_NAME ($SIZE)"
+                BUILT_FILES="$BUILT_FILES $FPK_NAME"
+              else
+                echo "::error::  [$PLATFORM] fnpack 未生成 fpk"
+              fi
+
+              # 清理
+              find "$APP_DIR/app" -maxdepth 1 -type f -executable \
+                ! -path "*/bin/*" ! -path "*/ui/*" -delete 2>/dev/null || true
+            done
+
+            # 恢复 manifest platform
+            sed -i "s/^platform.*=.*/platform              = x86/" "$APP_DIR/manifest"
+          done
+
+          # 输出给后续步骤
+          BUILT_FILES=$(echo "$BUILT_FILES" | xargs)
+          TAG=$(echo "$TAG_PARTS" | xargs | tr ' ' '+' | head -c 50)
+          [ -z "$TAG" ] && TAG="$(date +"%Y.%m.%d-%H%M")"
+
+          echo "built=$BUILT_FILES" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "构建完成: $BUILT_FILES"
+          echo "Tag: $TAG"
+          ls -lh "$DIST_DIR/"
+
+      # ---- 检查版本是否已存在 ----
+      - name: Check Release
+        id: check
+        run: |
+          TAG="${{ steps.build.outputs.tag }}"
+          FORCE="${{ inputs.force }}"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif gh release view "$TAG" &>/dev/null; then
+            echo "Release $TAG 已存在"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- 上传 Artifacts ----
+      - name: Upload Artifacts
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fnos-fpk-${{ steps.build.outputs.tag }}
+          path: dist/*.fpk
+          retention-days: 7
+
+      # ---- 生成 Release Body ----
+      - name: Generate Release Body
+        if: steps.check.outputs.skip == 'false'
+        id: body
+        run: |
+          APPS="${{ steps.discover.outputs.apps }}"
+          BUILT="${{ steps.build.outputs.built }}"
+          DIST_DIR="$GITHUB_WORKSPACE/dist"
+
+          {
+            echo "## fnOS 应用包"
+            echo ""
+            echo "### 文件列表"
+            echo ""
+            echo "| 文件 | 架构 | 大小 |"
+            echo "|------|------|------|"
+            for f in $BUILT; do
+              ARCH=$(echo "$f" | grep -oP '_(x86|arm)_v' | tr -d '_v')
+              SIZE=$(du -h "$DIST_DIR/$f" | cut -f1)
+              echo "| \`$f\` | $ARCH | $SIZE |"
+            done
+            echo ""
+            echo "### 应用"
+            for app in $APPS; do
+              VER=$(grep "^version" "$GITHUB_WORKSPACE/$app/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
+              echo "- **$app** v${VER}"
+            done
+            echo ""
+            echo "---"
+            echo "Commit: ${{ github.sha }}"
+          } > /tmp/release-body.md
+
+          echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
+
+      # ---- 创建 Draft Release ----
+      - name: Create Draft Release
+        if: steps.check.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.build.outputs.tag }}
+          name: "${{ steps.build.outputs.tag }}"
+          draft: true
+          prerelease: false
+          body_path: /tmp/release-body.md
+          files: dist/*.fpk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- 摘要 ----
+      - name: Summary
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          echo "### 构建完成" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          for f in ${{ steps.build.outputs.built }}; do
+            SIZE=$(du -h "$GITHUB_WORKSPACE/dist/$f" | cut -f1)
+            echo "- \`$f\` ($SIZE)" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**[Draft Release](https://github.com/${{ github.repository }}/releases/tag/${{ steps.build.outputs.tag }})** — 请手动确认后发布" >> $GITHUB_STEP_SUMMARY
+
+      - name: Skipped
+        if: steps.check.outputs.skip == 'true'
+        run: |
+          echo "### Release 已存在，跳过构建" >> $GITHUB_STEP_SUMMARY
+          echo "如需重新构建，请勾选「强制重新构建」" >> $GITHUB_STEP_SUMMARY
