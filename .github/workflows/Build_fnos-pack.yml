@@ -184,23 +184,16 @@ jobs:
             [ -z "$APP_FPK_FILES" ] && { echo "  无构建产物，跳过发布"; continue; }
 
             # ---- 创建独立 Draft Release ----
-            RELEASE_BODY="$(cat <<REOF
-## ${M_APPNAME}
+            RELEASE_BODY_FILE="/tmp/release_body_${M_APPNAME}.md"
+            printf '## %s\n\n| File | Arch | Size |\n|------|------|------|\n' "$M_APPNAME" > "$RELEASE_BODY_FILE"
 
-| 文件 | 架构 | 大小 |
-|------|------|------|
-REOF
-)"
             for fpk in $APP_FPK_FILES; do
               ARCH=$(echo "$fpk" | grep -oP '_(x86|arm)_v' | tr -d '_v')
               FSIZE=$(du -h "$DIST_DIR/$fpk" | cut -f1)
-              RELEASE_BODY="$RELEASE_BODY
-| \`$fpk\` | $ARCH | $FSIZE |"
+              printf '| `%s` | %s | %s |\n' "$fpk" "$ARCH" "$FSIZE" >> "$RELEASE_BODY_FILE"
             done
-            RELEASE_BODY="$RELEASE_BODY
 
----
-Commit: ${{ github.sha }}"
+            printf '\n---\nCommit: %s\n' "${{ github.sha }}" >> "$RELEASE_BODY_FILE"
 
             # 收集 fpk 完整路径
             FPK_PATHS=""
@@ -213,7 +206,7 @@ Commit: ${{ github.sha }}"
             if gh release create "$APP_TAG" $FPK_PATHS \
                 --draft \
                 --title "$APP_TAG" \
-                --notes "$RELEASE_BODY"; then
+                --notes-file "$RELEASE_BODY_FILE"; then
               echo "  ✓ Draft Release 已创建"
               BUILT_SUMMARY="$BUILT_SUMMARY\n- \`$APP_TAG\` ($(echo $APP_FPK_FILES | wc -w) 个文件)"
             else
