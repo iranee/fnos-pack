@@ -1,0 +1,7 @@
+{
+    "defaults": {
+        "run-as": "package"
+    },
+    "username": "resilio-sync",
+    "groupname": "resilio-sync"
+}

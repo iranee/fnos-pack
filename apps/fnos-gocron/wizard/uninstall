@@ -1,0 +1,27 @@
+[
+    {
+        "stepTitle": "卸载应用",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "保留或删除 Gocron 的配置和任务数据。"
+            },
+            {
+                "type": "radio",
+                "field": "wizard_delete_data",
+                "label": "数据处理方式",
+                "initValue": "false",
+                "options": [
+                    {
+                        "label": "保留现有数据（配置、任务记录）",
+                        "value": "false"
+                    },
+                    {
+                        "label": "清除所有数据文件（不可恢复）！",
+                        "value": "true"
+                    }
+                ]
+            }
+        ]
+    }
+]

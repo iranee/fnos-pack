@@ -1,0 +1,19 @@
+#!/bin/sh
+APP_DIR="${TRIM_APPDEST}"
+APP_DATA_DIR="$1"
+
+export HOME="$APP_DATA_DIR"
+
+GOCRON_LINK="$APP_DIR/.gocron"
+
+mkdir -p "$APP_DATA_DIR/.gocron"
+
+if [ -d "$GOCRON_LINK" ] && [ ! -L "$GOCRON_LINK" ]; then
+    cp -a "$GOCRON_LINK/"* "$APP_DATA_DIR/.gocron/" 2>/dev/null || true
+    rm -rf "$GOCRON_LINK"
+fi
+
+[ -L "$GOCRON_LINK" ] || ln -sf "$APP_DATA_DIR/.gocron" "$GOCRON_LINK"
+
+cd "$APP_DATA_DIR" || exit 1
+exec "$APP_DIR/gocron-node" -allow-root

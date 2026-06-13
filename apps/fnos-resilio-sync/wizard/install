@@ -1,0 +1,28 @@
+[
+    {
+        "stepTitle": "Resilio Sync 设置",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "<b>Resilio Sync</b>基于 P2P 技术的文件同步和共享工具。<br />安装完成后，点击桌面图标即可打开 Web 管理界面。"
+            },
+            {
+                "type": "tips",
+                "helpText": "<h3>首次登录</h3>首次打开 Web UI 时，会引导你设置管理员用户名和密码。"
+            }
+        ]
+    },
+    {
+        "stepTitle": "Pro 许可证与同步目录",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "<h3>Pro 许可证</h3>应用已内置 Pro 许可证文件。<br /><br />激活方式：打开 Web UI → 进入许可证设置 → 点击「应用许可证」→ 浏览到应用数据目录 <code>/var/apps/resilio-sync/var/</code>，选择 <code>ResilioSyncPro.btskey</code> 文件即可。"
+            },
+            {
+                "type": "tips",
+                "helpText": "<h3>同步目录</h3>Resilio Sync 需要访问您想要同步的文件目录。<br />安装完成后，请前往 <b>系统设置 → 应用设置 → Resilio Sync</b>，在「授权目录」中添加需要同步的文件夹，并选择 <b>读写</b> 权限。"
+            }
+        ]
+    }
+]

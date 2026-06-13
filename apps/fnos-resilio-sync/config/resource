@@ -1,0 +1,19 @@
+{
+    "port-config": {
+        "protocol-file": "ResilioSync.sc"
+    },
+    "data-share": {
+        "shares": [
+            {
+                "name": "Resilio Sync",
+                "permission": {
+                    "rw": [
+                        "resilio-sync"
+                    ]
+                }
+            }
+        ]
+    },
+    "systemd-unit": {
+    }
+}

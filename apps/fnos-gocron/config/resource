@@ -1,0 +1,17 @@
+{
+    "port-config": {
+        "protocol-file": "Gocron.sc"
+    },
+    "data-share": {
+        "shares": [
+            {
+                "name": "Gocron",
+                "permission": {
+                    "rw": ["gocron"]
+                }
+            }
+        ]
+    },
+    "systemd-unit": {
+    }
+}

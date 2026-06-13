@@ -1,0 +1,8 @@
+#!/bin/sh
+APP_DIR="${TRIM_APPDEST}"
+APP_DATA_DIR="$1"
+
+export HOME="$APP_DATA_DIR"
+
+cd "$APP_DATA_DIR" || exit 1
+exec "$APP_DIR/rslsync" --nodaemon --config "$APP_DATA_DIR/sync.conf"

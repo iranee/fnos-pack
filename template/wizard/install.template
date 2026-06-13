@@ -1,0 +1,15 @@
+[
+    {
+        "stepTitle": "安装说明",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "<b>DISPLAY_NAME</b><br>TODO: 添加应用介绍和使用说明。"
+            },
+            {
+                "type": "tips",
+                "helpText": "安装完成后，点击桌面图标即可打开 Web 管理界面。<br>应用端口：<b>PORT</b>"
+            }
+        ]
+    }
+]

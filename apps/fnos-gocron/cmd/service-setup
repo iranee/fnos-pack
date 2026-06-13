@@ -1,0 +1,33 @@
+#!/bin/bash
+
+LOG_FILE="${TRIM_PKGVAR}/${TRIM_APPNAME}.log"
+PID_FILE="${TRIM_PKGVAR}/${TRIM_APPNAME}.pid"
+
+APP_DIR="${TRIM_APPDEST}"
+APP_DATA_DIR="${TRIM_PKGVAR}"
+
+# 多行 SERVICE_COMMAND：框架会为每行分别启动进程并记录 PID
+# 第一行: gocron-server（Web 服务）
+# 第二行: gocron-node（任务执行节点）
+SERVICE_COMMAND="$APP_DIR/bin/gocron-server $APP_DATA_DIR
+$APP_DIR/bin/gocron-node $APP_DATA_DIR"
+SVC_BACKGROUND=y
+SVC_WRITE_PID=y
+
+# ---- 安装后：初始化数据目录 ----
+service_postinst() {
+    mkdir -p "$APP_DATA_DIR/.gocron" 2>/dev/null || true
+}
+
+# ---- 卸载前：确保所有进程被终止 ----
+service_preuninst() {
+    pkill -x "gocron" 2>/dev/null || true
+    pkill -x "gocron-node" 2>/dev/null || true
+    sleep 1
+    pkill -9 -x "gocron" 2>/dev/null || true
+    pkill -9 -x "gocron-node" 2>/dev/null || true
+}
+
+service_poststop() {
+    service_preuninst
+}

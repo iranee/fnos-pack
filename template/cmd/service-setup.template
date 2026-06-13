@@ -1,0 +1,62 @@
+#!/bin/bash
+# =============================================================
+# service-setup — 应用服务配置（每个应用唯一）
+# =============================================================
+# 框架文件 (main, common, installer 等) 来自 shared/cmd/ 模板，
+# 本文件是唯一需要针对每个应用定制的文件。
+#
+# 框架提供的变量:
+#   TRIM_APPDEST   — 应用安装目录（如 /var/apps/<appname>）
+#   TRIM_PKGVAR    — 持久化数据目录（如 /vol1/@appdata/<appname>）
+#   TRIM_APPNAME   — 应用名
+#   LOG_FILE       — 日志文件路径
+#   PID_FILE       — PID 文件路径
+#
+# 需要配置的变量:
+#   SERVICE_COMMAND — 启动命令（支持多行，每行一个进程）
+#   SVC_BACKGROUND  — 是否后台运行 (y/n)
+#   SVC_WRITE_PID   — 是否记录 PID (y/n)
+#
+# 可覆盖的钩子函数（按需实现，不写则跳过）:
+#   service_preinst()    — 安装前
+#   service_postinst()   — 安装后（初始化数据目录等）
+#   service_prestart()   — 启动前
+#   service_preuninst()  — 卸载前（停止进程等）
+#   service_postuninst() — 卸载后
+#   service_poststop()   — 停止后
+# =============================================================
+
+LOG_FILE="${TRIM_PKGVAR}/${TRIM_APPNAME}.log"
+PID_FILE="${TRIM_PKGVAR}/${TRIM_APPNAME}.pid"
+
+APP_DIR="${TRIM_APPDEST}"
+APP_DATA_DIR="${TRIM_PKGVAR}"
+
+# ---- 启动命令 ----
+# 约定: 每个 app 的 wrapper 脚本命名为 bin/${TRIM_APPNAME}-server
+# 框架运行时 TRIM_APPNAME 自动等于 manifest 中的 appname
+SERVICE_COMMAND="$APP_DIR/bin/${TRIM_APPNAME}-server $APP_DATA_DIR"
+#
+# 多进程示例（每行一个命令，框架会为每个进程记录 PID）:
+# SERVICE_COMMAND="$APP_DIR/bin/${TRIM_APPNAME}-server $APP_DATA_DIR
+# $APP_DIR/bin/${TRIM_APPNAME}-worker $APP_DATA_DIR"
+
+SVC_BACKGROUND=y
+SVC_WRITE_PID=y
+
+# ---- 安装后：初始化数据目录 ----
+service_postinst() {
+    mkdir -p "$APP_DATA_DIR" 2>/dev/null || true
+}
+
+# ---- 卸载前：确保进程被终止 ----
+service_preuninst() {
+    # TODO: 替换为实际的进程名
+    pkill -x "TODO" 2>/dev/null || true
+    sleep 1
+    pkill -9 -x "TODO" 2>/dev/null || true
+}
+
+service_poststop() {
+    service_preuninst
+}
