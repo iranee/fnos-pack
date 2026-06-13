@@ -1,7 +1,7 @@
 # =============================================================
 # Build fnOS fpk — 通用多应用打包 CI
 # =============================================================
-# 自动发现所有含 manifest 的子目录，逐个打包 fpk。
+# 自动发现 apps/ 下所有含 manifest 的子目录，逐个打包 fpk。
 # 每个应用如有 download.sh，会先执行下载二进制。
 # 构建完成后创建 Draft Release（草稿箱，需手动发布）。
 # =============================================================
@@ -49,20 +49,21 @@ jobs:
         id: discover
         run: |
           APP_FILTER="${{ inputs.app }}"
+          APPS_BASE="apps"
 
           if [ -n "$APP_FILTER" ]; then
             # 指定应用
-            [ -d "$APP_FILTER" ] || { echo "::error::目录不存在: $APP_FILTER"; exit 1; }
-            [ -f "$APP_FILTER/manifest" ] || { echo "::error::$APP_FILTER 缺少 manifest"; exit 1; }
+            [ -d "$APPS_BASE/$APP_FILTER" ] || { echo "::error::目录不存在: apps/$APP_FILTER"; exit 1; }
+            [ -f "$APPS_BASE/$APP_FILTER/manifest" ] || { echo "::error::apps/$APP_FILTER 缺少 manifest"; exit 1; }
             APPS="$APP_FILTER"
           else
-            # 发现所有含 manifest 的子目录
+            # 发现 apps/ 下所有含 manifest 的子目录
             APPS=""
-            for dir in */; do
+            for dir in "$APPS_BASE"/*/; do
               [ -f "$dir/manifest" ] && APPS="$APPS $(basename "$dir")"
             done
             APPS=$(echo "$APPS" | xargs)
-            [ -n "$APPS" ] || { echo "::error::未找到含 manifest 的应用目录"; exit 1; }
+            [ -n "$APPS" ] || { echo "::error::apps/ 下未找到含 manifest 的应用目录"; exit 1; }
           fi
 
           echo "apps=$APPS" >> "$GITHUB_OUTPUT"
@@ -76,11 +77,73 @@ jobs:
           chmod +x fnpack
           echo "fnpack 已就绪"
 
-      # ---- 逐个应用构建 ----
-      - name: Build
-        id: build
+      # ---- 逐个应用检查 Release 是否已存在 ----
+      - name: Check Releases
+        id: check
         run: |
           APPS="${{ steps.discover.outputs.apps }}"
+          VERSION_OVERRIDE="${{ inputs.version }}"
+          FORCE="${{ inputs.force }}"
+
+          BUILD_APPS=""
+          SKIP_APPS=""
+          TAG_PARTS=""
+
+          for APP_NAME in $APPS; do
+            APP_DIR="$GITHUB_WORKSPACE/apps/$APP_NAME"
+            M_APPNAME=$(grep "^appname" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
+            M_VERSION=$(grep "^version" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
+            [ -n "$VERSION_OVERRIDE" ] && M_VERSION="$VERSION_OVERRIDE"
+
+            if [ -z "$M_APPNAME" ] || [ -z "$M_VERSION" ]; then
+              echo "::warning::$APP_NAME: manifest 缺少 appname 或 version，跳过"
+              continue
+            fi
+
+            APP_TAG="${M_APPNAME}_v${M_VERSION}"
+            TAG_PARTS="$TAG_PARTS $APP_TAG"
+
+            if [ "$FORCE" = "true" ]; then
+              echo "  $APP_NAME ($APP_TAG) — 强制构建"
+              BUILD_APPS="$BUILD_APPS $APP_NAME"
+            elif gh release view "$APP_TAG" &>/dev/null; then
+              echo "  $APP_NAME ($APP_TAG) — Release 已存在，跳过"
+              SKIP_APPS="$SKIP_APPS $APP_TAG"
+            else
+              echo "  $APP_NAME ($APP_TAG) — 需要构建"
+              BUILD_APPS="$BUILD_APPS $APP_NAME"
+            fi
+          done
+
+          BUILD_APPS=$(echo "$BUILD_APPS" | xargs)
+          SKIP_APPS=$(echo "$SKIP_APPS" | xargs)
+
+          # 组合 Tag
+          TAG=$(echo "$TAG_PARTS" | xargs | tr ' ' '+' | head -c 50)
+
+          echo "build_apps=$BUILD_APPS" >> "$GITHUB_OUTPUT"
+          echo "skip_apps=$SKIP_APPS" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "需要构建: ${BUILD_APPS:-无}"
+          echo "已跳过:   ${SKIP_APPS:-无}"
+          echo "Release Tag: $TAG"
+
+          if [ -z "$BUILD_APPS" ]; then
+            echo "all_skipped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "all_skipped=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- 逐个应用构建（仅构建未发布的应用）----
+      - name: Build
+        id: build
+        if: steps.check.outputs.all_skipped == 'false'
+        run: |
+          BUILD_APPS="${{ steps.check.outputs.build_apps }}"
           VERSION_OVERRIDE="${{ inputs.version }}"
           DIST_DIR="$GITHUB_WORKSPACE/dist"
           FNPACK="$GITHUB_WORKSPACE/fnpack"
@@ -89,38 +152,28 @@ jobs:
           # 架构列表
           ARCHS=("x86" "arm")
           declare -A ARCH_DIR=( ["x86"]="x86_64" ["arm"]="arm64" )
-          declare -A ARCH_UPSTREAM=( ["x86"]="amd64" ["arm"]="arm64" )
 
           BUILT_FILES=""
-          TAG_PARTS=""
 
-          for APP_NAME in $APPS; do
+          for APP_NAME in $BUILD_APPS; do
             echo ""
             echo "════════════════════════════════════════"
             echo "  $APP_NAME"
             echo "════════════════════════════════════════"
 
-            APP_DIR="$GITHUB_WORKSPACE/$APP_NAME"
+            APP_DIR="$GITHUB_WORKSPACE/apps/$APP_NAME"
 
             # 读取 manifest
             M_APPNAME=$(grep "^appname" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
             M_VERSION=$(grep "^version" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
-
-            # 版本覆盖
             [ -n "$VERSION_OVERRIDE" ] && M_VERSION="$VERSION_OVERRIDE"
 
-            if [ -z "$M_APPNAME" ] || [ -z "$M_VERSION" ]; then
-              echo "::warning::$APP_NAME: manifest 缺少 appname 或 version，跳过"
-              continue
-            fi
-
             echo "  版本: v${M_VERSION}"
-            TAG_PARTS="$TAG_PARTS ${M_APPNAME}_v${M_VERSION}"
 
-            # ---- 执行 get.sh（如果有）----
+            # ---- 执行 download.sh（如果有）----
             if [ -x "$APP_DIR/download.sh" ] || [ -f "$APP_DIR/download.sh" ]; then
               echo "  执行 download.sh 下载二进制..."
-              (cd "$APP_DIR" && bash download.sh "$M_VERSION") || echo "::warning::download.sh 执行失败"
+              (cd "$APP_DIR" && bash download.sh "$M_VERSION") || echo "::warning::$APP_NAME: download.sh 执行失败"
             fi
 
             # ---- 逐架构打包 ----
@@ -130,7 +183,7 @@ jobs:
               echo ""
               echo "  [$PLATFORM] 构建中..."
 
-              # 清理
+              # 清理残留
               find "$APP_DIR/app" -maxdepth 1 -type f -executable \
                 ! -path "*/bin/*" ! -path "*/ui/*" -delete 2>/dev/null || true
 
@@ -154,7 +207,7 @@ jobs:
               # 移动输出
               SOURCE_FPK="$APP_DIR/${M_APPNAME}.fpk"
               if [ -f "$SOURCE_FPK" ]; then
-                FPK_NAME="${M_APPNAME}_${PLATFORM}_v${M_VERSION}.fpk"
+                FPK_NAME="fnos-${M_APPNAME}_${PLATFORM}_v${M_VERSION}.fpk"
                 mv "$SOURCE_FPK" "$DIST_DIR/$FPK_NAME"
                 SIZE=$(du -h "$DIST_DIR/$FPK_NAME" | cut -f1)
                 echo "  [$PLATFORM] ✓ $FPK_NAME ($SIZE)"
@@ -172,53 +225,30 @@ jobs:
             sed -i "s/^platform.*=.*/platform              = x86/" "$APP_DIR/manifest"
           done
 
-          # 输出给后续步骤
+          # 输出
           BUILT_FILES=$(echo "$BUILT_FILES" | xargs)
-          TAG=$(echo "$TAG_PARTS" | xargs | tr ' ' '+' | head -c 50)
-          [ -z "$TAG" ] && TAG="$(date +"%Y.%m.%d-%H%M")"
-
           echo "built=$BUILT_FILES" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
           echo ""
           echo "构建完成: $BUILT_FILES"
-          echo "Tag: $TAG"
           ls -lh "$DIST_DIR/"
-
-      # ---- 检查版本是否已存在 ----
-      - name: Check Release
-        id: check
-        run: |
-          TAG="${{ steps.build.outputs.tag }}"
-          FORCE="${{ inputs.force }}"
-
-          if [ "$FORCE" = "true" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          elif gh release view "$TAG" &>/dev/null; then
-            echo "Release $TAG 已存在"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ---- 上传 Artifacts ----
       - name: Upload Artifacts
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.all_skipped == 'false' && steps.build.outputs.built != ''
         uses: actions/upload-artifact@v4
         with:
-          name: fnos-fpk-${{ steps.build.outputs.tag }}
+          name: fnos-fpk-${{ steps.check.outputs.tag }}
           path: dist/*.fpk
           retention-days: 7
 
       # ---- 生成 Release Body ----
       - name: Generate Release Body
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.all_skipped == 'false' && steps.build.outputs.built != ''
         id: body
         run: |
-          APPS="${{ steps.discover.outputs.apps }}"
           BUILT="${{ steps.build.outputs.built }}"
+          SKIP_APPS="${{ steps.check.outputs.skip_apps }}"
           DIST_DIR="$GITHUB_WORKSPACE/dist"
 
           {
@@ -233,12 +263,13 @@ jobs:
               SIZE=$(du -h "$DIST_DIR/$f" | cut -f1)
               echo "| \`$f\` | $ARCH | $SIZE |"
             done
-            echo ""
-            echo "### 应用"
-            for app in $APPS; do
-              VER=$(grep "^version" "$GITHUB_WORKSPACE/$app/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
-              echo "- **$app** v${VER}"
-            done
+            if [ -n "$SKIP_APPS" ]; then
+              echo ""
+              echo "### 已跳过（Release 已存在）"
+              for tag in $SKIP_APPS; do
+                echo "- $tag"
+              done
+            fi
             echo ""
             echo "---"
             echo "Commit: ${{ github.sha }}"
@@ -248,11 +279,11 @@ jobs:
 
       # ---- 创建 Draft Release ----
       - name: Create Draft Release
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.all_skipped == 'false' && steps.build.outputs.built != ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.build.outputs.tag }}
-          name: "${{ steps.build.outputs.tag }}"
+          tag_name: ${{ steps.check.outputs.tag }}
+          name: "${{ steps.check.outputs.tag }}"
           draft: true
           prerelease: false
           body_path: /tmp/release-body.md
@@ -262,7 +293,7 @@ jobs:
 
       # ---- 摘要 ----
       - name: Summary
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.all_skipped == 'false' && steps.build.outputs.built != ''
         run: |
           echo "### 构建完成" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -270,11 +301,17 @@ jobs:
             SIZE=$(du -h "$GITHUB_WORKSPACE/dist/$f" | cut -f1)
             echo "- \`$f\` ($SIZE)" >> $GITHUB_STEP_SUMMARY
           done
+          SKIP_APPS="${{ steps.check.outputs.skip_apps }}"
+          if [ -n "$SKIP_APPS" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "已跳过: $SKIP_APPS" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**[Draft Release](https://github.com/${{ github.repository }}/releases/tag/${{ steps.build.outputs.tag }})** — 请手动确认后发布" >> $GITHUB_STEP_SUMMARY
+          echo "**[Draft Release](https://github.com/${{ github.repository }}/releases/tag/${{ steps.check.outputs.tag }})** — 请手动确认后发布" >> $GITHUB_STEP_SUMMARY
 
       - name: Skipped
-        if: steps.check.outputs.skip == 'true'
+        if: steps.check.outputs.all_skipped == 'true'
         run: |
-          echo "### Release 已存在，跳过构建" >> $GITHUB_STEP_SUMMARY
+          echo "### 所有应用的 Release 均已存在，跳过构建" >> $GITHUB_STEP_SUMMARY
+          echo "已跳过: ${{ steps.check.outputs.skip_apps }}" >> $GITHUB_STEP_SUMMARY
           echo "如需重新构建，请勾选「强制重新构建」" >> $GITHUB_STEP_SUMMARY
