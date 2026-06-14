@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================
-# get.sh — 从 GitHub Release 下载 gocron 二进制文件
+# download.sh — 从 GitHub Release 下载 gocron 二进制文件
 # 来源: https://github.com/gocronx-team/gocron/releases
 #
 # 用法:
-#   ./get.sh           # 自动获取最新版本
-#   ./get.sh 1.6.2     # 指定版本
-#   ./get.sh --arch x86       # 仅 x86_64
-#   ./get.sh --arch arm 1.6.2 # 仅 arm64，指定版本
+#   ./download.sh                       # 自动获取最新版本
+#   ./download.sh 1.6.2                 # 指定版本
+#   ./download.sh --check               # 仅输出版本号，不下载
+#   ./download.sh --arch x86            # 仅 x86_64
+#   ./download.sh --arch arm 1.6.2      # 仅 arm64，指定版本
 # =============================================================
 
 set -e
@@ -18,16 +19,19 @@ GITHUB_REPO="gocronx-team/gocron"
 # ---- 参数解析 ----
 ARCH=""
 VERSION=""
+CHECK_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --arch)     ARCH="$2"; shift 2 ;;
         --arch=*)   ARCH="${1#*=}"; shift ;;
+        --check)    CHECK_ONLY=true; shift ;;
         -h|--help)
-            echo "用法: $0 [--arch x86|arm] [版本号]"
+            echo "用法: $0 [--arch x86|arm] [--check] [版本号]"
             echo ""
             echo "  默认下载双架构 (x86_64 + arm64)"
             echo "  版本号留空则自动获取最新 Release"
+            echo "  --check 仅输出上游最新版本号，不下载"
             exit 0
             ;;
         -*) echo "[ERROR] 未知选项: $1"; exit 1 ;;
@@ -47,12 +51,18 @@ fi
 
 # ---- 确定版本 ----
 if [ -n "$VERSION" ]; then
-    echo "[INFO] 使用指定版本: v${VERSION}"
+    echo "[INFO] 使用指定版本: v${VERSION}" >&2
 else
     VERSION=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
         | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')
-    [ -n "$VERSION" ] || { echo "[ERROR] 无法获取最新版本号"; exit 1; }
-    echo "[INFO] 最新版本: v${VERSION}"
+    [ -n "$VERSION" ] || { echo "[ERROR] 无法获取最新版本号" >&2; exit 1; }
+    echo "[INFO] 最新版本: v${VERSION}" >&2
+fi
+
+# ---- 仅检查版本 ----
+if [ "$CHECK_ONLY" = true ]; then
+    echo "$VERSION"
+    exit 0
 fi
 
 # ---- 下载基础 URL ----
