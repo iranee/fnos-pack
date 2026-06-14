@@ -74,7 +74,7 @@ jobs:
           chmod +x fnpack
           echo "fnpack 已就绪"
 
-      # ---- 逐应用：下载最新版 → 检查 → 构建 → 发布 ----
+      # ---- 逐应用：查版本 → 比较 → 按需下载构建发布 ----
       - name: Build & Release
         id: build
         env:
@@ -102,49 +102,72 @@ jobs:
 
             APP_DIR="$GITHUB_WORKSPACE/apps/$APP_NAME"
 
-            # ---- 读取 appname ----
+            # ---- 读取 appname、本地版本、上游仓库 ----
             M_APPNAME=$(grep "^appname" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
+            LOCAL_VERSION=$(grep "^version" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
+            UPSTREAM_REPO=$(grep "^upstream_repo" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
+
             if [ -z "$M_APPNAME" ]; then
               echo "::warning::$APP_NAME: manifest 缺少 appname，跳过"
               continue
             fi
 
-            # ---- 第一步：下载最新版本 ----
-            # download.sh 不传版本号 -> 自动查询上游最新版本并更新 manifest
-            # 如果用户指定了版本号，则使用指定版本
-            if [ -x "$APP_DIR/download.sh" ] || [ -f "$APP_DIR/download.sh" ]; then
-              if [ -n "$VERSION_OVERRIDE" ]; then
-                echo "  执行 download.sh (指定版本: $VERSION_OVERRIDE)..."
-                (cd "$APP_DIR" && bash download.sh "$VERSION_OVERRIDE") || {
-                  echo "::warning::$APP_NAME: download.sh 执行失败"
-                  continue
-                }
+            echo "  本地版本: ${LOCAL_VERSION:-未知}"
+
+            # ---- 用户指定版本号 ----
+            if [ -n "$VERSION_OVERRIDE" ]; then
+              TARGET_VERSION="$VERSION_OVERRIDE"
+              echo "  使用指定版本: v${TARGET_VERSION}"
+
+            # ---- 查询上游最新版本号（manifest 中有 upstream_repo 时）----
+            elif [ -n "$UPSTREAM_REPO" ]; then
+              echo "  查询上游 ${UPSTREAM_REPO} 最新版本..."
+              UPSTREAM_VERSION=$(curl -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null \
+                | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/' || echo "")
+              UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | tr -d '[:space:]')
+
+              if [ -z "$UPSTREAM_VERSION" ]; then
+                echo "  上游版本查询失败，使用本地版本: $LOCAL_VERSION"
+                TARGET_VERSION="$LOCAL_VERSION"
+              elif [ "$UPSTREAM_VERSION" = "$LOCAL_VERSION" ]; then
+                echo "  上游 v${UPSTREAM_VERSION} = 本地 v${LOCAL_VERSION}，已是最新"
+                SKIPPED_SUMMARY="$SKIPPED_SUMMARY\n- \`$APP_NAME\` — 已是最新 v${LOCAL_VERSION}"
+                continue
               else
-                echo "  执行 download.sh (自动检测最新版本)..."
-                (cd "$APP_DIR" && bash download.sh) || {
-                  echo "::warning::$APP_NAME: download.sh 执行失败"
-                  continue
-                }
+                echo "  发现新版本: v${LOCAL_VERSION} -> v${UPSTREAM_VERSION}"
+                TARGET_VERSION="$UPSTREAM_VERSION"
               fi
+            else
+              # 没有 upstream_repo，使用 manifest 版本
+              TARGET_VERSION="$LOCAL_VERSION"
             fi
 
-            # ---- 第二步：读取 manifest 版本号（download.sh 可能已更新）----
-            M_VERSION=$(grep "^version" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
-            if [ -z "$M_VERSION" ]; then
-              echo "::warning::$APP_NAME: manifest 缺少 version，跳过"
+            if [ -z "$TARGET_VERSION" ]; then
+              echo "::warning::$APP_NAME: 无法确定目标版本，跳过"
               continue
             fi
 
-            APP_TAG="${M_APPNAME}_v${M_VERSION}"
-            echo "  当前版本: v${M_VERSION}"
+            APP_TAG="${M_APPNAME}_v${TARGET_VERSION}"
+            echo "  目标版本: v${TARGET_VERSION}"
             echo "  Release Tag: $APP_TAG"
 
-            # ---- 第三步：检查 Release 是否已存在 ----
+            # ---- 第二步：检查 Release 是否已存在 ----
             if [ "$FORCE" != "true" ] && gh release view "$APP_TAG" &>/dev/null; then
               echo "  Release $APP_TAG 已存在，跳过"
               SKIPPED_SUMMARY="$SKIPPED_SUMMARY\n- \`$APP_TAG\` — Release 已存在"
               continue
             fi
+
+            # ---- 第三步：下载二进制 ----
+            if [ -x "$APP_DIR/download.sh" ] || [ -f "$APP_DIR/download.sh" ]; then
+              echo "  执行 download.sh (v${TARGET_VERSION})..."
+              (cd "$APP_DIR" && bash download.sh "$TARGET_VERSION") || {
+                echo "::warning::$APP_NAME: download.sh 执行失败"
+                continue
+              }
+            fi
+
+            M_VERSION="$TARGET_VERSION"
 
             # ---- 第四步：逐架构打包 ----
             APP_FPK_FILES=""
