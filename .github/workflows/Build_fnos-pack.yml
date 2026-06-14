@@ -2,7 +2,7 @@
 # Build fnOS fpk — 通用多应用打包 CI
 # =============================================================
 # 自动发现 apps/ 下所有含 manifest 的子目录。
-# 每个应用独立检查、下载、打包、发布 Draft Release。
+# 每个应用独立：查最新版本 → 检查 Release → 构建 → 发布。
 # =============================================================
 
 name: Build fnOS fpk
@@ -15,7 +15,7 @@ on:
         required: false
         default: ''
       version:
-        description: '版本号（留空使用 manifest 中的版本）'
+        description: '版本号（留空自动检测最新版本）'
         required: false
         default: ''
       force:
@@ -74,7 +74,7 @@ jobs:
           chmod +x fnpack
           echo "fnpack 已就绪"
 
-      # ---- 逐应用：检查 → 构建 → 发布 ----
+      # ---- 逐应用：下载最新版 → 检查 → 构建 → 发布 ----
       - name: Build & Release
         id: build
         env:
@@ -102,35 +102,51 @@ jobs:
 
             APP_DIR="$GITHUB_WORKSPACE/apps/$APP_NAME"
 
-            # 读取 manifest
+            # ---- 读取 appname ----
             M_APPNAME=$(grep "^appname" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
-            M_VERSION=$(grep "^version" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
-            [ -n "$VERSION_OVERRIDE" ] && M_VERSION="$VERSION_OVERRIDE"
+            if [ -z "$M_APPNAME" ]; then
+              echo "::warning::$APP_NAME: manifest 缺少 appname，跳过"
+              continue
+            fi
 
-            if [ -z "$M_APPNAME" ] || [ -z "$M_VERSION" ]; then
-              echo "::warning::$APP_NAME: manifest 缺少 appname 或 version，跳过"
+            # ---- 第一步：下载最新版本 ----
+            # download.sh 不传版本号 -> 自动查询上游最新版本并更新 manifest
+            # 如果用户指定了版本号，则使用指定版本
+            if [ -x "$APP_DIR/download.sh" ] || [ -f "$APP_DIR/download.sh" ]; then
+              if [ -n "$VERSION_OVERRIDE" ]; then
+                echo "  执行 download.sh (指定版本: $VERSION_OVERRIDE)..."
+                (cd "$APP_DIR" && bash download.sh "$VERSION_OVERRIDE") || {
+                  echo "::warning::$APP_NAME: download.sh 执行失败"
+                  continue
+                }
+              else
+                echo "  执行 download.sh (自动检测最新版本)..."
+                (cd "$APP_DIR" && bash download.sh) || {
+                  echo "::warning::$APP_NAME: download.sh 执行失败"
+                  continue
+                }
+              fi
+            fi
+
+            # ---- 第二步：读取 manifest 版本号（download.sh 可能已更新）----
+            M_VERSION=$(grep "^version" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
+            if [ -z "$M_VERSION" ]; then
+              echo "::warning::$APP_NAME: manifest 缺少 version，跳过"
               continue
             fi
 
             APP_TAG="${M_APPNAME}_v${M_VERSION}"
-            echo "  Tag: $APP_TAG"
+            echo "  当前版本: v${M_VERSION}"
+            echo "  Release Tag: $APP_TAG"
 
-            # ---- 检查 Release 是否已存在 ----
+            # ---- 第三步：检查 Release 是否已存在 ----
             if [ "$FORCE" != "true" ] && gh release view "$APP_TAG" &>/dev/null; then
               echo "  Release $APP_TAG 已存在，跳过"
               SKIPPED_SUMMARY="$SKIPPED_SUMMARY\n- \`$APP_TAG\` — Release 已存在"
               continue
             fi
 
-            echo "  版本: v${M_VERSION}"
-
-            # ---- 执行 download.sh（如果有）----
-            if [ -x "$APP_DIR/download.sh" ] || [ -f "$APP_DIR/download.sh" ]; then
-              echo "  执行 download.sh 下载二进制..."
-              (cd "$APP_DIR" && bash download.sh "$M_VERSION") || echo "::warning::$APP_NAME: download.sh 执行失败"
-            fi
-
-            # ---- 逐架构打包 ----
+            # ---- 第四步：逐架构打包 ----
             APP_FPK_FILES=""
 
             for PLATFORM in "${ARCHS[@]}"; do
@@ -147,7 +163,7 @@ jobs:
               if [ -d "$APP_DIR/$BIN_ARCH_DIR" ] && [ "$(ls -A "$APP_DIR/$BIN_ARCH_DIR" 2>/dev/null)" ]; then
                 cp "$APP_DIR/$BIN_ARCH_DIR/"* "$APP_DIR/app/" 2>/dev/null || true
                 chmod +x "$APP_DIR/app/"* 2>/dev/null || true
-                echo "  [$PLATFORM] 已复制 $BIN_ARCH_DIR/ → app/"
+                echo "  [$PLATFORM] 已复制 $BIN_ARCH_DIR/ -> app/"
               else
                 echo "::warning::  [$PLATFORM] $BIN_ARCH_DIR/ 不存在或为空"
               fi
@@ -166,7 +182,7 @@ jobs:
                 FPK_NAME="fnos-${M_APPNAME}_${PLATFORM}_v${M_VERSION}.fpk"
                 mv "$SOURCE_FPK" "$DIST_DIR/$FPK_NAME"
                 SIZE=$(du -h "$DIST_DIR/$FPK_NAME" | cut -f1)
-                echo "  [$PLATFORM] ✓ $FPK_NAME ($SIZE)"
+                echo "  [$PLATFORM] OK $FPK_NAME ($SIZE)"
                 APP_FPK_FILES="$APP_FPK_FILES $FPK_NAME"
               else
                 echo "::error::  [$PLATFORM] fnpack 未生成 fpk"
@@ -183,14 +199,14 @@ jobs:
             APP_FPK_FILES=$(echo "$APP_FPK_FILES" | xargs)
             [ -z "$APP_FPK_FILES" ] && { echo "  无构建产物，跳过发布"; continue; }
 
-            # ---- 创建独立 Draft Release ----
+            # ---- 第五步：创建独立 Draft Release ----
             RELEASE_BODY_FILE="/tmp/release_body_${M_APPNAME}.md"
             printf '## %s\n\n| File | Arch | Size |\n|------|------|------|\n' "$M_APPNAME" > "$RELEASE_BODY_FILE"
 
             for fpk in $APP_FPK_FILES; do
-              ARCH=$(echo "$fpk" | grep -oP '_(x86|arm)_v' | tr -d '_v')
+              FARCH=$(echo "$fpk" | grep -oP '_(x86|arm)_v' | tr -d '_v')
               FSIZE=$(du -h "$DIST_DIR/$fpk" | cut -f1)
-              printf '| `%s` | %s | %s |\n' "$fpk" "$ARCH" "$FSIZE" >> "$RELEASE_BODY_FILE"
+              printf '| `%s` | %s | %s |\n' "$fpk" "$FARCH" "$FSIZE" >> "$RELEASE_BODY_FILE"
             done
 
             printf '\n---\nCommit: %s\n' "${{ github.sha }}" >> "$RELEASE_BODY_FILE"
@@ -207,7 +223,7 @@ jobs:
                 --draft \
                 --title "$APP_TAG" \
                 --notes-file "$RELEASE_BODY_FILE"; then
-              echo "  ✓ Draft Release 已创建"
+              echo "  Draft Release 已创建"
               BUILT_SUMMARY="$BUILT_SUMMARY\n- \`$APP_TAG\` ($(echo $APP_FPK_FILES | wc -w) 个文件)"
             else
               echo "::error::  创建 Release 失败"
@@ -255,4 +271,4 @@ jobs:
             echo "无应用需要构建" >> $GITHUB_STEP_SUMMARY
           fi
 
-          echo "**[Draft Releases](https://github.com/${{ github.repository }}/releases)** — 请手动确认后发布" >> $GITHUB_STEP_SUMMARY
+          echo "**[Draft Releases](https://github.com/${{ github.repository }}/releases?q=&type=draft&state=unpublished)** — 请手动确认后发布" >> $GITHUB_STEP_SUMMARY
