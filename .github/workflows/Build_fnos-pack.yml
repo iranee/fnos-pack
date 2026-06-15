@@ -91,10 +91,28 @@ jobs:
           ARCHS=("x86" "arm")
           declare -A ARCH_DIR=( ["x86"]="x86_64" ["arm"]="arm64" )
 
+          # 排除列表：不再自动构建的应用
+          SKIP_APPS=("fnos-resilio-sync")
+
           BUILT_SUMMARY=""
           SKIPPED_SUMMARY=""
 
           for APP_NAME in $APPS; do
+            # 检查是否在排除列表中
+            SKIP=false
+            for skip_app in "${SKIP_APPS[@]}"; do
+              if [ "$APP_NAME" = "$skip_app" ]; then
+                SKIP=true
+                break
+              fi
+            done
+            if [ "$SKIP" = true ]; then
+              echo ""
+              echo "  $APP_NAME — 在排除列表中，跳过"
+              SKIPPED_SUMMARY="$SKIPPED_SUMMARY\n- \`$APP_NAME\` — 已排除"
+              continue
+            fi
+
             echo ""
             echo "════════════════════════════════════════"
             echo "  $APP_NAME"
