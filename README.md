@@ -10,5 +10,5 @@
 
 | Logo | App | 端口 | 说明 |
 |:---:|:---:|:---:|:---:|
-| <img src="apps/fnos-gocron/ICON.PNG" width="28"> | **Gocron 任务管理** | `5920` | Go语言开发的任务管理器 |
-| <img src="apps/fnos-resilio-sync/ICON.PNG" width="28"> | **Resilio Sync** | `8890` | Resilio Sync同步程序 |
+| <img src="apps/fnos-gocron/ICON.PNG" width="28"> | **[Gocron 任务管理](https://github.com/iranee/fnos-pack/releases?q=gocron)** | `5920` | Go语言开发的任务管理器 |
+| <img src="apps/fnos-resilio-sync/ICON.PNG" width="28"> | **[Resilio Sync](https://github.com/iranee/fnos-pack/releases?q=Resilio)** | `8890` | Resilio Sync同步程序 |
