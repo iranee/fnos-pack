@@ -102,43 +102,33 @@ jobs:
 
             APP_DIR="$GITHUB_WORKSPACE/apps/$APP_NAME"
 
-            # ---- 读取 appname、本地版本、上游仓库 ----
+            # ---- 读取 appname 和本地版本 ----
             M_APPNAME=$(grep "^appname" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
             LOCAL_VERSION=$(grep "^version" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
-            UPSTREAM_REPO=$(grep "^upstream_repo" "$APP_DIR/manifest" | awk -F'=' '{print $2}' | tr -d ' ')
 
             if [ -z "$M_APPNAME" ]; then
               echo "::warning::$APP_NAME: manifest 缺少 appname，跳过"
               continue
             fi
 
-            echo "  本地版本: ${LOCAL_VERSION:-未知}"
-
-            # ---- 用户指定版本号 ----
+            # ---- 确定目标版本 ----
             if [ -n "$VERSION_OVERRIDE" ]; then
+              # 用户指定版本号
               TARGET_VERSION="$VERSION_OVERRIDE"
               echo "  使用指定版本: v${TARGET_VERSION}"
-
-            # ---- 查询上游最新版本号（manifest 中有 upstream_repo 时）----
-            elif [ -n "$UPSTREAM_REPO" ]; then
-              echo "  查询上游 ${UPSTREAM_REPO} 最新版本..."
-              UPSTREAM_VERSION=$(curl -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null \
-                | grep '"tag_name"' | head -1 | sed 's/.*"v\{0,1\}\([^"]*\)".*/\1/' || echo "")
-              UPSTREAM_VERSION=$(echo "$UPSTREAM_VERSION" | tr -d '[:space:]')
-
-              if [ -z "$UPSTREAM_VERSION" ]; then
-                echo "  上游版本查询失败，使用本地版本: $LOCAL_VERSION"
+            elif [ -f "$APP_DIR/download.sh" ]; then
+              # 通过 download.sh --check 查询最新版本号（不下载）
+              echo "  查询最新版本 (download.sh --check)..."
+              TARGET_VERSION=$(cd "$APP_DIR" && bash download.sh --check 2>/dev/null || echo "")
+              TARGET_VERSION=$(echo "$TARGET_VERSION" | tr -d '[:space:]')
+              if [ -z "$TARGET_VERSION" ]; then
+                echo "  download.sh --check 无输出，使用 manifest 版本: $LOCAL_VERSION"
                 TARGET_VERSION="$LOCAL_VERSION"
-              elif [ "$UPSTREAM_VERSION" = "$LOCAL_VERSION" ]; then
-                echo "  上游 v${UPSTREAM_VERSION} = 本地 v${LOCAL_VERSION}，已是最新"
-                SKIPPED_SUMMARY="$SKIPPED_SUMMARY\n- \`$APP_NAME\` — 已是最新 v${LOCAL_VERSION}"
-                continue
               else
-                echo "  发现新版本: v${LOCAL_VERSION} -> v${UPSTREAM_VERSION}"
-                TARGET_VERSION="$UPSTREAM_VERSION"
+                echo "  上游最新版本: v${TARGET_VERSION}"
               fi
             else
-              # 没有 upstream_repo，使用 manifest 版本
+              # 没有 download.sh，使用 manifest 版本
               TARGET_VERSION="$LOCAL_VERSION"
             fi
 
@@ -151,7 +141,7 @@ jobs:
             echo "  目标版本: v${TARGET_VERSION}"
             echo "  Release Tag: $APP_TAG"
 
-            # ---- 第二步：检查 Release 是否已存在 ----
+            # ---- 检查 Release 是否已存在 ----
             if [ "$FORCE" != "true" ] && gh release view "$APP_TAG" &>/dev/null; then
               echo "  Release $APP_TAG 已存在，跳过"
               SKIPPED_SUMMARY="$SKIPPED_SUMMARY\n- \`$APP_TAG\` — Release 已存在"
@@ -172,28 +162,45 @@ jobs:
             # ---- 第四步：逐架构打包 ----
             APP_FPK_FILES=""
 
-            for PLATFORM in "${ARCHS[@]}"; do
-              BIN_ARCH_DIR="${ARCH_DIR[$PLATFORM]}"
+            # 检测应用类型：有架构目录走逐架构构建，没有则走通用构建
+            HAS_ARCH=false
+            if [ -d "$APP_DIR/x86_64" ] || [ -d "$APP_DIR/arm64" ]; then
+              HAS_ARCH=true
+            fi
 
+            if [ "$HAS_ARCH" = true ]; then
+              BUILD_ARCHS=("${ARCHS[@]}")
+            else
+              BUILD_ARCHS=("universal")
+              echo "  模式: 通用应用（无架构二进制）"
+            fi
+
+            for PLATFORM in "${BUILD_ARCHS[@]}"; do
               echo ""
               echo "  [$PLATFORM] 构建中..."
 
-              # 清理残留
-              find "$APP_DIR/app" -maxdepth 1 -type f -executable \
-                ! -path "*/bin/*" ! -path "*/ui/*" -delete 2>/dev/null || true
+              if [ "$PLATFORM" != "universal" ]; then
+                BIN_ARCH_DIR="${ARCH_DIR[$PLATFORM]}"
 
-              # 复制二进制
-              if [ -d "$APP_DIR/$BIN_ARCH_DIR" ] && [ "$(ls -A "$APP_DIR/$BIN_ARCH_DIR" 2>/dev/null)" ]; then
-                cp "$APP_DIR/$BIN_ARCH_DIR/"* "$APP_DIR/app/" 2>/dev/null || true
-                chmod +x "$APP_DIR/app/"* 2>/dev/null || true
-                echo "  [$PLATFORM] 已复制 $BIN_ARCH_DIR/ -> app/"
-              else
-                echo "::warning::  [$PLATFORM] $BIN_ARCH_DIR/ 不存在或为空"
+                # 清理残留
+                find "$APP_DIR/app" -maxdepth 1 -type f -executable \
+                  ! -path "*/bin/*" ! -path "*/ui/*" -delete 2>/dev/null || true
+
+                # 复制二进制
+                if [ -d "$APP_DIR/$BIN_ARCH_DIR" ] && [ "$(ls -A "$APP_DIR/$BIN_ARCH_DIR" 2>/dev/null)" ]; then
+                  cp "$APP_DIR/$BIN_ARCH_DIR/"* "$APP_DIR/app/" 2>/dev/null || true
+                  chmod +x "$APP_DIR/app/"* 2>/dev/null || true
+                  echo "  [$PLATFORM] 已复制 $BIN_ARCH_DIR/ -> app/"
+                else
+                  echo "::warning::  [$PLATFORM] $BIN_ARCH_DIR/ 不存在或为空"
+                fi
+
+                # 更新 manifest platform
+                sed -i "s/^platform.*=.*/platform              = ${PLATFORM}/" "$APP_DIR/manifest"
               fi
 
-              # 更新 manifest
+              # 更新 manifest version
               sed -i "s/^version.*=.*/version               = ${M_VERSION}/" "$APP_DIR/manifest"
-              sed -i "s/^platform.*=.*/platform              = ${PLATFORM}/" "$APP_DIR/manifest"
 
               # fnpack build
               cd "$APP_DIR"
@@ -202,7 +209,11 @@ jobs:
               # 移动输出
               SOURCE_FPK="$APP_DIR/${M_APPNAME}.fpk"
               if [ -f "$SOURCE_FPK" ]; then
-                FPK_NAME="fnos-${M_APPNAME}_${PLATFORM}_v${M_VERSION}.fpk"
+                if [ "$PLATFORM" = "universal" ]; then
+                  FPK_NAME="fnos-${M_APPNAME}_v${M_VERSION}.fpk"
+                else
+                  FPK_NAME="fnos-${M_APPNAME}_${PLATFORM}_v${M_VERSION}.fpk"
+                fi
                 mv "$SOURCE_FPK" "$DIST_DIR/$FPK_NAME"
                 SIZE=$(du -h "$DIST_DIR/$FPK_NAME" | cut -f1)
                 echo "  [$PLATFORM] OK $FPK_NAME ($SIZE)"
@@ -211,13 +222,17 @@ jobs:
                 echo "::error::  [$PLATFORM] fnpack 未生成 fpk"
               fi
 
-              # 清理
-              find "$APP_DIR/app" -maxdepth 1 -type f -executable \
-                ! -path "*/bin/*" ! -path "*/ui/*" -delete 2>/dev/null || true
+              # 清理架构二进制
+              if [ "$PLATFORM" != "universal" ]; then
+                find "$APP_DIR/app" -maxdepth 1 -type f -executable \
+                  ! -path "*/bin/*" ! -path "*/ui/*" -delete 2>/dev/null || true
+              fi
             done
 
-            # 恢复 manifest platform
-            sed -i "s/^platform.*=.*/platform              = x86/" "$APP_DIR/manifest"
+            # 恢复 manifest platform（仅架构应用需要）
+            if [ "$HAS_ARCH" = true ]; then
+              sed -i "s/^platform.*=.*/platform              = x86/" "$APP_DIR/manifest"
+            fi
 
             APP_FPK_FILES=$(echo "$APP_FPK_FILES" | xargs)
             [ -z "$APP_FPK_FILES" ] && { echo "  无构建产物，跳过发布"; continue; }
@@ -227,7 +242,8 @@ jobs:
             printf '## %s\n\n| File | Arch | Size |\n|------|------|------|\n' "$M_APPNAME" > "$RELEASE_BODY_FILE"
 
             for fpk in $APP_FPK_FILES; do
-              FARCH=$(echo "$fpk" | grep -oP '_(x86|arm)_v' | tr -d '_v')
+              FARCH=$(echo "$fpk" | grep -oP '_(x86|arm)_v' | tr -d '_v' || true)
+              [ -z "$FARCH" ] && FARCH="universal"
               FSIZE=$(du -h "$DIST_DIR/$fpk" | cut -f1)
               printf '| `%s` | %s | %s |\n' "$fpk" "$FARCH" "$FSIZE" >> "$RELEASE_BODY_FILE"
             done
