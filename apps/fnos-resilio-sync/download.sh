@@ -26,6 +26,13 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --arch)     ARCH="$2"; shift 2 ;;
         --arch=*)   ARCH="${1#*=}"; shift ;;
+        --check)
+            # CI 版本检测：输出 manifest 中的版本号（Resilio 无公开版本 API）
+            MANIFEST_DIR="$(cd "$(dirname "$0")" && pwd)"
+            VERSION=$(grep "^version" "$MANIFEST_DIR/manifest" 2>/dev/null | awk -F'=' '{print $2}' | tr -d ' ')
+            echo "${VERSION:-unknown}"
+            exit 0
+            ;;
         -h|--help)
             echo "用法: $0 [--arch x86|arm]"
             echo ""
