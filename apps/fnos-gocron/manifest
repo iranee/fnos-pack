@@ -1,7 +1,7 @@
 appname               = gocron
-version               = 1.6.2
+version               = 1.6.4
 display_name          = "Gocron 定时任务"
-desc                  = "Go语言开发的定时任务集中调度和管理系统，用于替代Linux crontab，支持Web界面管理。"
+desc                  = "<b>Gocron</b> 是一个Go语言开发的定时任务集中调度和管理系统，用于替代Linux crontab。<p>⚡️ 高性能：基于Go语言开发，性能卓越，资源占用低</p><p>🎯 易于使用：Web界面管理，简单直观</p><p>🔐 安全可靠：支持双因素认证（2FA）和TLS双向认证</p><p>📊 日志管理：完善的任务执行日志</p><p>🌐 分布式：支持多节点部署</p><p>🤖 AI 辅助：自然语言转 cron 表达式、失败日志 AI 诊断</p>"
 platform              = x86
 source                = thirdparty
 desktop_uidir         = ui
