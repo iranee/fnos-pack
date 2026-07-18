@@ -12,3 +12,7 @@
 |:---:|:---:|:---:|:---:|
 | <img src="apps/fnos-gocron/ICON.PNG" width="28"> | **[Gocron 任务管理](https://github.com/iranee/fnos-pack/releases?q=gocron)** | `5920` | Go语言开发的任务管理器 |
 | <img src="apps/fnos-resilio-sync/ICON.PNG" width="28"> | **[Resilio Sync](https://github.com/iranee/fnos-pack/releases?q=Resilio)** | `8890` | Resilio Sync同步程序 |
+
+----
+### QQ 交流群
+![](https://raw.githubusercontent.com/iranee/fnos-hermes-agent/refs/heads/main/preview/qq.png)
